@@ -1,0 +1,157 @@
+---
+title: "Bulk RNA-Seq Analysis | REPLICATES SELECTION"
+author: "Dulce Ma. Montero Rasgado"
+date: "2023-07-11"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# "Bulk" RNA-Seq Analysis
+
+# Replicates check and selection
+
+### General workflow
+
+The fundamental steps of the analysis are:
+
+1.  Quality control: RIN (already computed, but is it ok)?
+2.  Mapping (already computed, but is it ok)?
+3.  Normalization
+4.  Parameter estimation
+5.  Identification of differentially expressed genes
+6.  Functional characterization of DE genes
+
+```{r libraries, echo=FALSE}
+library(recount3)
+library(recount)
+library(BiocManager)
+# library(limma)
+library(edgeR)
+library(DESeq2)
+# library(regionReport)
+# library(clusterProfiler)
+# library(org.Hs.eg.db)
+# library(gplots)
+# library(derfinder)
+# library(GenomicState)
+# library(bumphunter)
+# library(derfinderPlot)
+# library(sessioninfo)
+```
+
+### Selecting Replicates
+
+```{r charging data}
+rse_brain <- readRDS("rse_brain.RDS")
+rse_colon <- readRDS("rse_colon.RDS")
+rse_liver <- readRDS("rse_liver.RDS")
+
+# access to count of reads tables
+assays(rse_brain)$counts <- transform_counts(rse_brain)
+assays(rse_colon)$counts <- transform_counts(rse_colon)
+assays(rse_liver)$counts <- transform_counts(rse_liver)
+
+```
+
+Our three replicates are, according to my matriculation number: **11738A**
+
+**The first two digits:** 11\
+Thus, my replicates should be 11, 12 & 13. Unless some tissue does not pass the required thresholds.
+
+We need to check the following parameters:\
+- RIN - % of mapped reads - % of rRNA reads
+
+In all three tissues the same columns must satisfy all the parameters.
+
+## 1. Brain Replicates Check
+
+```{r BRAIN RIN check}
+colData(rse_brain)$gtex.smrin[11]
+colData(rse_brain)$gtex.smrin[12]
+colData(rse_brain)$gtex.smrin[13]
+```
+
+All the three samples pass the RIN threshold (at least 6).\
+\> Note: why is 6 the minimum recommended?
+
+```{r BRAIN Estimated fraction of rRNA}
+colData(rse_brain)$gtex.smrrnart[11]
+colData(rse_brain)$gtex.smrrnart[12] 
+colData(rse_brain)$gtex.smrrnart[13]
+```
+
+Threshold is lower than 10% (0.1), so again, all samples pass!
+
+```{r BRAIN Percentage of Mapped Reads}
+colData(rse_brain)$"recount_qc.star.uniquely_mapped_reads_%_both"[11]
+
+colData(rse_brain)$"recount_qc.star.uniquely_mapped_reads_%_both"[12]
+
+colData(rse_brain)$"recount_qc.star.uniquely_mapped_reads_%_both"[13]
+```
+
+Ideally we are looking for at least 85% of the reads uniquely mapped. All three **brain samples** passed the threshold! :D
+
+**Brain replicates: 11, 12, 13**
+
+
+## 2. Colon Replicates Check
+
+```{r COLON RIN check}
+colData(rse_colon)$gtex.smrin[11]
+colData(rse_colon)$gtex.smrin[20] 
+colData(rse_colon)$gtex.smrin[21] 
+```
+
+Threshold \>= 6
+
+```{r COLON Estimated fraction of rRNA}
+colData(rse_colon)$gtex.smrrnart[11] # SI
+colData(rse_colon)$gtex.smrrnart[20] # 
+colData(rse_colon)$gtex.smrrnart[21] # SI
+```
+
+Threshold is lower than 10% (0.1).
+
+```{r COLON Percentage of Mapped Reads}
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[11] 
+
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[20] 
+
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[21]
+```
+
+At least 85% of the reads uniquely mapped. **11, 20 & 21 columns** of **colon samples** passed the threshold! :D
+
+## 3. Liver Replicates Check
+
+```{r LIVER RIN check}
+colData(rse_colon)$gtex.smrin[11] # yes
+colData(rse_colon)$gtex.smrin[20] 
+colData(rse_colon)$gtex.smrin[21] 
+```
+
+Threshold \>= 6
+
+```{r LIVER Estimated fraction of rRNA}
+colData(rse_colon)$gtex.smrrnart[11] # yes
+colData(rse_colon)$gtex.smrrnart[20] # 
+colData(rse_colon)$gtex.smrrnart[21] # 
+```
+
+Threshold is lower than 10% (0.1).
+
+```{r LIVER Percentage of Mapped Reads}
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[11] # yes
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[20] # yes 
+colData(rse_colon)$"recount_qc.star.uniquely_mapped_reads_%_both"[21] # yes!
+```
+
+At least 85% of the reads uniquely mapped. **11, 20 & 21 columns** of **liver samples** passed the threshold! :D
+
+Once we have selected the three samples/replicates for the DE analysis, we can build a rse and the count table containing only them!

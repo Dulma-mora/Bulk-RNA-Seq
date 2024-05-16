@@ -1,0 +1,486 @@
+---
+title: "Bulk RNA-Seq Analysis"
+author: "Dulce Ma. Montero Rasgado"
+date: "2023-07-12"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Bulk RNA-Seq Analysis
+
+## Dulce María Montero Rasgado
+
+```{r libraries, echo=FALSE}
+library(recount3)
+library(recount)
+library(edgeR)
+library(ggplot2)
+
+
+```
+
+```{r charging data}
+rse_brain <- readRDS("rse_brain.RDS")
+rse_colon <- readRDS("rse_colon.RDS")
+rse_liver <- readRDS("rse_liver.RDS")
+
+# access to count of reads tables
+assays(rse_brain)$counts <- transform_counts(rse_brain)
+assays(rse_colon)$counts <- transform_counts(rse_colon)
+assays(rse_liver)$counts <- transform_counts(rse_liver)
+
+```
+
+------------------------------------------------------------------------
+
+## 1. Filtering and cleaning of the data sets
+
+After checking and selecting the three replicates of each tissue we have:\
+**Brain replicates:** 11, 12, 13\
+**Colon replicates:** 11, 20, 21\
+**liver replicates:** 11, 20, 21
+
+# extracting a table with the replicates of each tissue
+```{r}
+rse_brain_selected <- rse_brain[,c(11, 12, 13)]
+rse_colon_selected <- rse_colon[,c(11, 20, 21)]
+rse_liver_selected <- rse_liver[,c(11, 20, 21)]
+
+counts_brain_selected <- assays(rse_brain_selected)$counts
+counts_colon_selected <- assays(rse_colon_selected)$counts
+counts_liver_selected <- assays(rse_liver_selected)$counts
+```
+
+Building the count table, give more meaningful name to the columns and the rows, and building the DGE object for edgeR.
+
+```{r DEGList creation}
+x <- cbind(counts_brain_selected,counts_colon_selected,counts_liver_selected)
+
+colnames(x) <- c("Brain11", "Brain12","Brain13",
+                 "Colon11", "Colon20","Colon21",
+                 "liver11", "liver20","liver21")
+
+rownames(x) <- rowData(rse_brain_selected)$gene_name
+
+y <- DGEList(counts=x)
+```
+
+Defying how replicates are grouped:
+
+```{r replicate labels}
+group <- as.factor(c("Brain","Brain","Brain",
+                     "Colon","Colon","Colon",
+                     "liver","liver","liver"))
+
+y$samples$group <- group
+```
+
+We add to the samples info the "quality" information that we employed to select them. For this we can add new labels to the "samples" field of the DGE object, like we just did for the groups
+
+```{r}
+y$samples$rin <- as.factor(c(colData(rse_brain_selected)$gtex.smrin,
+                             colData(rse_colon_selected)$gtex.smrin,
+                             colData(rse_liver_selected)$gtex.smrin))
+
+y$samples$slice <- as.factor(c(colData(rse_brain_selected)$gtex.smtsd,
+                               colData(rse_colon_selected)$gtex.smtsd,
+                               colData(rse_liver_selected)$gtex.smtsd))
+
+y$samples$sex <- as.factor(c(colData(rse_brain_selected)$gtex.sex,
+                             colData(rse_colon_selected)$gtex.sex,
+                             colData(rse_liver_selected)$gtex.sex))
+
+y$samples$age <- as.factor(c(colData(rse_brain_selected)$gtex.age,
+                             colData(rse_colon_selected)$gtex.age,
+                             colData(rse_liver_selected)$gtex.age))
+
+y$samples$rRNA <- as.factor(c(colData(rse_brain_selected)$gtex.smrrnart,
+                              colData(rse_colon_selected)$gtex.smrrnart,
+                              colData(rse_liver_selected)$gtex.smrrnart))
+
+y$samples$mapped <- as.factor(c(colData(rse_brain_selected)$"recount_qc.star.uniquely_mapped_reads_%_both",
+                                colData(rse_colon_selected)$"recount_qc.star.uniquely_mapped_reads_%_both",
+                                colData(rse_liver_selected)$"recount_qc.star.uniquely_mapped_reads_%_both"))
+
+y$samples$chrm <- as.factor(c(colData(rse_brain_selected)$"recount_qc.aligned_reads%.chrm",
+                              colData(rse_colon_selected)$"recount_qc.aligned_reads%.chrm",
+                              colData(rse_liver_selected)$"recount_qc.aligned_reads%.chrm"))
+y
+```
+
+lib-sizes are fine :D
+
+
+Checking library sizes \| Just a exploratory check
+
+------------------------------------------------------------------------
+
+```{r}
+table(rowSums(y$counts==0)==9)
+```
+
+Filtrado de y en función de: - Su expresión (utilizando el grupo definido)
+
+```{r}
+keep.exprs <- filterByExpr(y, group=group)
+  y <- y[keep.exprs,, keep.lib.sizes=FALSE]
+  dim(y)
+```
+
+> Hay 23841 genes que cumplen con los criterios de expresión definidos y están presentes en al menos uno de los replicados de los tejidos cerebro, colon y hígado. Se están considerando 23841 genes para el análisis, lo que permite estudiar su expresión y comprender cómo se relaciona con los diferentes tejidos y condiciones experimentales. Al centrarse en estos genes específicos, se reduce el ruido o la variabilidad no deseada en el análisis y se puede obtener una visión más precisa de los patrones de expresión génica asociados con los tejidos estudiados.
+
+------------------------------------------------------------------------
+
+## Transforming counts \| Normalization
+
+Aim: visualize the normalization effects on the logCPM
+
+#TODO: take the normalization factors
+
+```{r}
+logcpm_before <- cpm(y, log=TRUE)
+y <- calcNormFactors(y, method = "TMM") #add norm counts
+print(y$samples)
+```
+
+> Este código realiza una transformación logarítmica de los CPM originales y luego calcula los factores de normalización utilizando el método TMM para ajustar las diferencias en la abundancia de lecturas entre las muestras.
+
+**Comparing count values distributions before and after normalization**
+
+```{r }
+logcpm_after <- cpm(y, log=TRUE)
+
+```
+
+```{r boxplot before and after normalization}
+library(RColorBrewer)
+
+# plotting
+#boxplot(logcpm_before)
+boxplot(logcpm_before, col = brewer.pal(3, "Reds"), outline = TRUE, main = "LogCPM before normalization", ylab = 'LogCPM')
+boxplot(logcpm_after, col = brewer.pal(3, "Blues"), outline = TRUE, main = "LogCPM after normalization", ylab = 'LogCPM')
+```
+
+"When the normalization factor is > 1, the corresponding box is shifted down viceversa if < 1 seems to be shifted up"
+
+------------------------------------------------------------------------
+
+## Linear Model Design
+
+```{r design matrix}
+design <- model.matrix(~0+group, data=y$samples)
+colnames(design) <- levels(y$samples$group)
+design
+```
+
+Seeing if and how the samples/replicates cluster together
+
+```{r PLOT MDS}
+logcpm <- cpm(y, log=TRUE) # calculate the logval of CPM for each gen
+plotMDS(logcpm, labels=group, main="2D plotting of replicates via MDS",col = c("#00AFBB","#00AFBB","#00AFBB", "#E7B800","#E7B800","#E7B800", 
+                "brown","brown","brown")) 
+#grafico de escalamiento multidimensional basado en logcpm
+```
+
+Brain clusters fine\
+Colon clusters regularly\
+There is a liver sample that it is a bit distant from the other two!
+
+> El gráfico MDS proporciona una representación visual de las similitudes o diferencias entre las muestras y cómo se agrupan en función de la variable group.
+
+Now let's label the points with different info to single out what seem to be the most relevant factors.
+
+```{r}
+# esto solo cambia el level en funcion de rRNA y chrm
+plotMDS(logcpm, labels=y$samples$rRNA,col = c("#00AFBB","#00AFBB","#00AFBB",
+                                              "#E7B800","#E7B800","#E7B800", 
+                                              "brown","brown","brown"))
+
+plotMDS(logcpm, labels=y$samples$chrm, main="Percentage of Mitochondrial RNA",col =c("#00AFBB","#00AFBB","#00AFBB", 
+                                                                                     "#E7B800","#E7B800","#E7B800", 
+                                                                                     "brown","brown","brown"))
+
+```
+
+Okay the reason is the % of rRNA and mitochondrial RNA, that liver sample differs in 3 units.\
+Colon samples differ also more or less 3 units among the three.
+
+# Dispersion estimation
+
+```{r Estimate Dispersion in the exp data}
+y <- estimateDisp(y, design)
+# Biological Coefficient of Variation plot
+plotBCV(y)
+```
+
+
+
+
+# Fitting the generalized linear model
+
+```{r beta parameter estimation}
+fit <- glmQLFit(y, design)
+```
+
+---
+
+## Pairwise contrast
+```{r}
+# brain     | brain
+# muscle    | colon
+# spleen    | liver
+
+#colon (top) vs brain (bottom)
+qlfCB <- glmQLFTest(fit, contrast=c(-1,1,0))
+
+#liver (top) vs brain (bottom)
+qlfLB <- glmQLFTest(fit, contrast=c(-1,0,1))
+
+#liver (top) vs colon (bottom)
+qlfLC <- glmQLFTest(fit, contrast=c(0,-1,1))
+```
+
+
+
+```{r}
+resultsCB <- topTags(qlfCB, n = 10000000, adjust.method = "BH", sort.by = "PValue", p.value = 1)$table
+
+
+resultsLB <- topTags(qlfLB, n = 10000000, adjust.method = "BH", sort.by = "PValue", p.value = 1)$table
+
+resultsLC <- topTags(qlfLC, n = 10000000, adjust.method = "BH", sort.by = "PValue", p.value = 1)$table
+
+```
+
+
+### Extracting DE genes 
+
+Filter results so that: * Remove genes with low expression values * Remove genes with have little or no annotation + Those whose gene symbol starts with “LOC…” + Those whose gene symbol starts with “LINC…” + Those that correspond to know “short” RNA genes, names starting with “MIR…” and “SNORD…” + Those that correspond to ribosomal proteins (gene symbol starts with “RPL….”)
+
+
+```{r creating a filter function}
+filterResult <- function(x) {
+    x <- x[x$logCPM > 0 & x$FDR <= 0.01, ]
+    x <- x[!(grepl("^LOC|^LINC|^MIR|^SNORD|^RPL", rownames(x))), ]
+    return(x)
+}
+
+```
+
+#TODO
+```{r}
+filterCB <- filterResult(resultsCB)
+filterLB <- filterResult(resultsLB)
+filterLC <- filterResult(resultsLC)
+```
+
+
+```{r up and down-regulated genes per tissue}
+up <- list(
+     # BRAIN
+     BC = length(rownames(filterCB)[filterCB$logFC < 0]), 
+     BL = length(rownames(filterLB)[filterLB$logFC < 0]),
+     BvALL = length(intersect(rownames(filterCB)[filterCB$logFC < 0], 
+                              rownames(filterLB)[filterLB$logFC < 0])),
+     # COLON
+     CB = length(rownames(filterCB)[filterLC$logFC > 0] ), #FIXXXX
+     CL = length(rownames(filterLC)[filterCB$logFC < 0 ]),
+     CvALL = length(intersect(rownames(filterLC)[filterLC$logFC > 0],
+                              rownames(filterCB)[filterCB$logFC < 0])),
+     
+     # LIVER
+     LB = length(rownames(filterLB)[filterLC$logFC > 0] ),
+     LC = length(rownames(filterLC)[filterLB$logFC > 0] ),
+     LvALL = length(intersect(rownames(filterLC)[filterLC$logFC > 0],
+                              rownames(filterLB)[filterLB$logFC > 0]))
+     
+)
+
+
+down <- list(
+     # BRAIN
+     BC = length(rownames(filterCB)[filterCB$logFC > 0]), 
+     BL = length(rownames(filterLB)[filterLB$logFC > 0]),
+     BvALL = length(intersect(rownames(filterCB)[filterCB$logFC > 0], 
+                              rownames(filterLB)[filterLB$logFC > 0])),
+     # COLON
+     CB = length(rownames(filterCB)[filterCB$logFC < 0] ),
+     CL = length(rownames(filterLC)[filterLC$logFC > 0 ]),
+     CvALL = length(intersect(rownames(filterCB)[filterLC$logFC < 0],
+                              rownames(filterLC)[filterCB$logFC > 0])),
+     
+     # LIVER
+     LB = length(rownames(filterLB)[filterLB$logFC < 0] ),
+     LC = length(rownames(filterLC)[filterLC$logFC < 0] ),
+     LvALL = length(intersect(rownames(filterLB)[filterLC$logFC < 0],
+                              rownames(filterLC)[filterLB$logFC < 0]))     
+)
+```
+
+
+```{r combining both lists}
+
+updown <- data.frame(up = unlist(up), down = -1*unlist(down))
+row.names(updown) <- c("BC", "BL","BvALL,",
+                     "CB", "CL","CvALL",
+                     "LB", "LC", "LvALL")
+updown$category <- row.names(updown)
+
+```
+
+
+```{r CREATING BARPLOT}
+
+p<-ggplot(updown, aes(x = category, y = up, fill = "Up-regulated")) +
+    geom_bar(stat = "identity") +
+    geom_bar(aes(y = down, fill = "Down-regulated"), stat = "identity") +
+    scale_fill_manual(
+        values = c("Up-regulated" = "#4DAF4A", "Down-regulated" = "#D22B2B"),
+        breaks = c("Up-regulated", "Down-regulated"),
+        labels = c("Up-regulated Genes", "Down-regulated Genes"),
+        guide = guide_legend(label.sep = " | ")
+    ) + 
+    labs(x = "Comparison", y = "Count", fill = NULL) +
+    ggtitle("Differentially Expressed Genes by Tissue") +
+    theme_minimal() +
+    geom_rect(
+        aes(xmin = 0.5, xmax = 3.5, ymin = -Inf, ymax = Inf),
+        fill = NA, color = "#00AFBB", linetype = "dashed"
+    ) +
+    geom_rect(
+        aes(xmin = 3.5, xmax = 6.5, ymin = -Inf, ymax = Inf),
+        fill = NA, color = "#E7B800", linetype = "dashed"
+    ) +
+    geom_rect(
+        aes(xmin = 6.5, xmax = 9.5, ymin = -Inf, ymax = Inf),
+        fill = NA, color = "brown", linetype = "dashed"
+    ) +
+    geom_text(
+        aes(x = 1.2, y = -4100, label = "Brain"), vjust = -0.5
+    ) +
+    geom_text(
+        aes(x = 4.5, y = -4100, label = "Colon"), vjust = -0.5
+    ) +
+    geom_text(
+        aes(x = 7.5, y = -4100, label = "Liver"), vjust = -0.5
+    )
+p
+
+
+```
+
+
+
+
+```{r principal genes for enrinchment analysis}
+
+# filterCB 
+# filterLB 
+# filterLC 
+
+topGenes <- list(
+  BvALL = filterCB[intersect(rownames(filterCB)[filterCB$logFC > 0],
+                             rownames(filterLB)[filterLB$logFC > 0]), ],
+  
+  CvALL = filterLC[intersect(rownames(filterCB)[filterLC$logFC > 0],
+                             rownames(filterLC)[filterCB$logFC < 0]), ],
+  
+  LvALL = filterLC[intersect(rownames(filterLB)[filterLC$logFC < 0], 
+                             rownames(filterLC)[filterLB$logFC < 0]), ]
+)
+
+# Ordering by logFC
+topGenes$BvALL <- topGenes$BvALL[order(topGenes$BvALL$logFC, 
+                                       decreasing = TRUE), ]
+topGenes$CvALL <- topGenes$CvALL[order(topGenes$CvALL$logFC,
+                                       decreasing = TRUE), ]
+topGenes$LvALL <- topGenes$LvALL[order(topGenes$LvALL$logFC,
+                                       decreasing = FALSE), ]
+
+
+```
+
+
+
+```{r COLONn}
+head(topGenes$BvALL, n=10)
+```
+
+COLON
+
+PIGR	intestine,colon, non- specific
+ZG16	intestine, non- specific
+GGT6	colon
+
+UGT2A3	
+MOGAT2	
+IGHV4-59	
+IGLV2-14	
+IGLV3-1	
+IGHA2	
+IGHV1-2
+
+
+
+
+```{r LIVERr}
+head(topGenes$CvALL, n=10)
+```
+
+LIVER: 
+
+ITIH3 tissue enrinched liver
+BBOX1
+
+
+
+```{r 1BRAIN}
+head(topGenes$LvALL, n=10)
+```
+
+BRAIN:
+
+
+
+# Assigning TPM
+
+```{r}
+assays(rse_brain)$TPM <- recount::getTPM(rse_brain)
+assays(rse_colon)$TPM <- recount::getTPM(rse_colon)
+assays(rse_liver)$TPM <- recount::getTPM(rse_liver)
+```
+
+```{r COLON}
+PIGR <- which(rowData(rse_brain)$gene_name == "PIGR")
+
+boxplot(assays(rse_brain)$TPM[PIGR,], assays(rse_colon)$TPM[PIGR,], assays(rse_liver)$TPM[PIGR,], outline=F, main = 'PIGR expression', ylab=' TPM values', xaxt = "n", names=c('Brain', 'Colon','Liver'), col = "#00AFBB")
+axis(1, at = 1:3, labels = c('Brain', 'Colon','Liver'), las = 2, cex.axis = 0.8)
+```
+
+
+```{r LIVER ITIH3}
+ITIH3 <- which(rowData(rse_brain)$gene_name == "ITIH3")
+
+boxplot(assays(rse_brain)$TPM[ITIH3,], assays(rse_colon)$TPM[ITIH3,], assays(rse_liver)$TPM[ITIH3,], outline=F, main = 'ITIH3 expression', ylab=' TPM values', xaxt = "n", names=c('Brain', 'Colon','Liver'), col = "#00AFBB")
+axis(1, at = 1:3, labels = c('Brain', 'Colon','Liver'), las = 2, cex.axis = 0.8)
+```
+
+
+```{r BRAINn}
+GNG13 <- which(rowData(rse_brain)$gene_name == "GNG13")
+
+boxplot(assays(rse_brain)$TPM[GNG13,], assays(rse_colon)$TPM[GNG13,], assays(rse_liver)$TPM[GNG13,], outline=F, main = 'GNG13 expression', ylab=' TPM values', xaxt = "n", names=c('Brain', 'Colon','Liver'), col = "#00AFBB")
+axis(1, at = 1:3, labels = c('Brain', 'Colon','Liver'), las = 2, cex.axis = 0.8)
+
+
+```
+
+
+
+
+
